@@ -96,7 +96,7 @@ epgd.pages.profile = {
                                    val = typeof p.value == "undefined" ? p["default"] : p.value;
                                    if (p.type == ptTime)
                                       val= epgd.utils.formatDateTime(val);
-                                   else if (p.type == ptBitMask) {
+                                   if (p.type == ptBitMask) {
                                       html += '<span id="bmaskgroup_' + p.name + '" style="width:75%;">';
                                       let array = val.split(',');
                                       for (let o = 0; o < p.options.length; o++) {
