@@ -25,8 +25,11 @@ epgd.sortTable.prototype = {
                 this.update();
                 break;
             case 'detail':
-                if (!$el[0].eventDetail)
-                    $el[0].eventDetail = new epgd.eventDetail(data);
+                if (!$el[0].eventDetail) {
+                    // Pass doneid for fallback when event is deleted
+                    var tData = $el.closest('tr')[0].tData;
+                    $el[0].eventDetail = new epgd.eventDetail(data, tData ? tData.doneid : null);
+                }
                 epgd.utils.loader.process(function () {
                     $el[0].eventDetail.render();
                 });
@@ -488,6 +491,8 @@ epgd.pages.timersDone.editIcons= '<span class="iAsButton i-trash edit" title="' 
 epgd.pages.timersDone.getTable = function () {
     return epgd.timerListBase.prototype.getTable.call(this).replace('data-defaultSort="1"', 'data-defaultSort="-1"')
 }
+// timersDone now uses the unified base action handler with doneid fallback
+
 // Timerhistorie
 epgd.pages.timerListDone = new epgd.timerListBase({
     updateUrl: 'data/donetimers', saveUrl: 'data/store-donetimers',
@@ -505,9 +510,16 @@ epgd.pages.timerListDone.getTable = function () {
        + '" data-t="0"></b><b title="' + epgd.tr.markToggle + '"><b class="selected"></b></b></div>'
        + '</th></tr></thead><tbody></tbody></table>';
 }
-epgd.pages.timerListDone.action = function ($el, iconName,data) {
-    if (iconName == 'detail' && !$el[0].eventDetail)
-       $el[0].eventDetail = new epgd.doneTimerDetail($el.parent()[0]);
+epgd.pages.timerListDone.action = function ($el, iconName, data) {
+    if (iconName == 'detail' && !$el[0].eventDetail) {
+        // Use eventDetail with channelid+starttime lookup, fallback to timersdone
+        var tData = $el.closest('tr')[0].tData;
+        var ed = new epgd.eventDetail(null, tData.id);  // null=no eventid, tData.id=doneid for fallback
+        ed._channelId = tData.channelid;
+        ed._startTime = tData.starttime + 1;  // +1 to get event starting at this time, not ending
+        ed._doneState = tData.state;  // Store state for display in popup
+        $el[0].eventDetail = ed;
+    }
     epgd.timerListBase.prototype.action.call(this, $el, iconName, data);
 }
 epgd.pages.timerListDone.stateIcons = {

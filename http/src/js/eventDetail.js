@@ -1,16 +1,102 @@
-epgd.eventDetail = function (id) {
+epgd.eventDetail = function (id, fallbackDoneid) {
     this.id = id;
+    this.fallbackDoneid = fallbackDoneid;
     this.data = null;
     this.expire = 0;
 }
 epgd.eventDetail.prototype.imgPath = false;
 epgd.eventDetail.prototype.load = function (channelId, time) {
     var self = this;
+    // Use stored _channelId/_startTime if available (from timerListDone)
+    channelId = channelId || this._channelId;
+    time = time || this._startTime;
+
+    // For timerListDone (no eventid, but has fallbackDoneid): load timersdone first, then event for scraper only
+    if (!this.id && this.fallbackDoneid) {
+        // Load timersdone data as primary source
+        epgd.ajax({
+            url: epgd.login.url + "data/donetimer?id=" + this.fallbackDoneid,
+            async: false, cache: false
+        }, function (doneData) {
+            if (doneData.donetimer) {
+                var t = doneData.donetimer;
+                self.data = {
+                    title: t.title,
+                    shorttext: t.shorttext,
+                    longdescription: t.longdescription,
+                    channelid: t.channelid,
+                    starttime: t.starttime,
+                    duration: t.duration,
+                    episode: { season: t.episodeseason, part: t.episodepart, lang: t.episodelang }
+                };
+                // Add state icon for display in top right
+                if (t.state && epgd.pages.timerListDone && epgd.pages.timerListDone.stateIcons) {
+                    self.data._timerStateHtml = epgd.pages.timerListDone.stateIcons[t.state];
+                }
+                self.expire = epgd.utils.now().getTime() + 900000;
+
+                // Now load event data for scraper info only (images, actors)
+                if (channelId && time) {
+                    epgd.ajax({
+                        url: epgd.login.url + "data/event?channelid=" + encodeURIComponent(channelId) + "&time=" + time,
+                        async: false, cache: false
+                    }, function (evtData) {
+                        if (evtData.event && evtData.event.title === self.data.title) {
+                            // Only take scraper data from event, keep timersdone text data
+                            self.data.scraper = evtData.event.scraper;
+                            self.data.imagecount = evtData.event.imagecount;
+                            self.data.category = evtData.event.category;
+                            self.data.recordings = evtData.event.recordings;
+                            // Keep event id for image loading
+                            self.id = evtData.id || evtData.event.id;
+                        }
+                    });
+                }
+            }
+        });
+        return this;
+    }
+
+    // Normal event loading (for timersDone and other pages)
     epgd.ajax({
-        url: epgd.login.url + "data/event?" + (channelId && time ? "channelid=" + channelId + "&time=" + time : "id=" + this.id), async: false, cache: false
+        url: epgd.login.url + "data/event?" + (channelId && time ? "channelid=" + encodeURIComponent(channelId) + "&time=" + time : "id=" + this.id), async: false, cache: false
     }, function (data) {
-        self.data = data.event; self.id = data.id; self.expire = epgd.utils.now().getTime() + 900000;
-    });     //15*60*1000
+        self.data = data.event;
+        self.id = data.id;
+        self.expire = epgd.utils.now().getTime() + 900000;
+
+        // Add timersdone state icon if available (from timersDone page)
+        if (self._doneState && self.data && epgd.pages.timerListDone && epgd.pages.timerListDone.stateIcons) {
+            self.data._timerStateHtml = epgd.pages.timerListDone.stateIcons[self._doneState];
+        }
+
+        // Fallback to timersdone if event has no title (event deleted after 6 hours)
+        if ((!self.data || !self.data.title) && self.fallbackDoneid) {
+            epgd.ajax({
+                url: epgd.login.url + "data/donetimer?id=" + self.fallbackDoneid,
+                async: false, cache: false
+            }, function (doneData) {
+                if (doneData.donetimer && doneData.donetimer.title) {
+                    var t = doneData.donetimer;
+                    self.data = self.data || {};
+                    self.data.title = t.title;
+                    self.data.shorttext = t.shorttext;
+                    self.data.longdescription = t.longdescription;
+                    self.data.channelid = self.data.channelid || t.channelid;
+                    self.data.starttime = self.data.starttime || t.starttime;
+                    self.data.duration = self.data.duration || t.duration;
+                    self.data.episode = self.data.episode || {};
+                    self.data.episode.season = t.episodeseason;
+                    self.data.episode.part = t.episodepart;
+                    self.data.episode.lang = t.episodelang;
+                    self.data._fromTimersDone = true;
+                    if (t.state && epgd.pages.timerListDone && epgd.pages.timerListDone.stateIcons) {
+                        self.data._timerStateHtml = epgd.pages.timerListDone.stateIcons[t.state];
+                    }
+                }
+            });
+        }
+    });
     return this;
 }
 epgd.eventDetail.prototype.render = function () {
@@ -349,6 +435,10 @@ epgd.eventDetail.win.prototype.render = function (detail) {
                 + '</b></div>';
         }
 
+    // Add timer state icon at the beginning of desc
+    if (e._timerStateHtml)
+        desc = '<div>' + e._timerStateHtml + '</div><hr>' + desc;
+
     this.$con = $('<div><h3><div class="date">' + $.datepicker.formatDate(isMobile ? 'd. M y' : 'd. MM yy', epgd.utils.date(e.starttime)) + '</div>'
                + (isMobile ? '' : e.title) + '<div class="time"><b>'
           + epgd.utils.formatTime(e.starttime) + '</b>&nbsp;&ndash;&nbsp;' + epgd.utils.formatTime(e.starttime + e.duration)
@@ -491,49 +581,6 @@ epgd.recordDetail.prototype.doNext = function (checkAvail) {
     if (checkAvail) return true;
     $elem.find('B').click();
 }
-
-epgd.doneTimerDetail = epgd.utils.inherits(function (tr) {
-    this.tr = tr;
-    return epgd.eventDetail.call(this);
-}, epgd.eventDetail);
-epgd.doneTimerDetail.prototype.load= function () {
-    var self = this;
-    epgd.ajax({ url: epgd.login.url + 'data/donetimer?id=' + this.tr.tData.id, async: false, cache: false }, function (data) {
-        var t = data.donetimer;
-        if (t.state)
-            t.cntlongdescription = epgd.pages.timerListDone.stateIcons[t.state];
-        t.episode = { lang: t.episodelang, season: t.episodeseason, part: t.episodepart };
-        self.id = data.id;
-        self.expire = epgd.utils.now().getTime() + 900000;
-        delete t.timerid;
-        delete t.id;
-        self.data = t;
-    });
-    return this;
-};
-epgd.doneTimerDetail.prototype.doRecord= function (eData) {
-    if (eData === true) return epgd.tr.pages.records.similarTimer;
-    epgd.eventDetail.prototype.doRecord.call(this, eData);
-    //epgd.pages.searchTimerList.dialog.render(eData || this.data);
-};
-epgd.doneTimerDetail.prototype.doPlay= function (checkAvail) {
-    return false;
-};
-epgd.doneTimerDetail.prototype.doPrev= function (checkAvail) {
-    var $elem = $(this.tr).prev('tr');
-    if (!$elem.length)
-        return false;
-    if (checkAvail) return true;
-    $elem.find('td').click();
-};
-epgd.doneTimerDetail.prototype.doNext= function (checkAvail) {
-    var $elem = $(this.tr).next('tr');
-    if (!$elem.length)
-        return false;
-    if (checkAvail) return true;
-    $elem.find('td').click();
-};
-
 
 $(document).ready(function () {
     epgd.eventDetail.prototype.win = new epgd.eventDetail.win();
